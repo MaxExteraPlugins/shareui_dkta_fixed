@@ -28,7 +28,7 @@
 ## 📥 Установка
 
 1. Перейдите во вкладку [**Releases**](https://github.com/MaxExteraPlugins/shareui_dkta_fixed/releases/latest).
-2. Скачайте файл плагина `shareui_dkta_fixed_v1.10.0.plugin`.
+2. Скачайте файл плагина `shareui_dkta_fixed_v1.10.1.plugin`.
 3. Отправьте файл в Telegram (в «Избранное») или откройте его через проводник в exteraGram / AyuGram.
 4. Нажмите на сообщение с плагином и выберите **«Установить плагин»**.
 
