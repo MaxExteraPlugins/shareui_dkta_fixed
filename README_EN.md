@@ -8,8 +8,8 @@
   <a href="https://github.com/MaxExteraPlugins/shareui_dkta_fixed/releases/latest">
     <img src="https://img.shields.io/github/v/release/MaxExteraPlugins/shareui_dkta_fixed?style=flat-square&color=blue" alt="Release Version"/>
   </a>
-  <img src="https://img.shields.io/badge/exteraGram-%3E%3D12.2.10-orange?style=flat-square" alt="exteraGram"/>
-  <img src="https://img.shields.io/badge/AyuGram-%3E%3D12.2.10-blueviolet?style=flat-square" alt="AyuGram"/>
+  <img src="https://img.shields.io/badge/exteraGram-%3E%3D12.10.6-orange?style=flat-square" alt="exteraGram"/>
+  <img src="https://img.shields.io/badge/AyuGram-%3E%3D12.10.6-blueviolet?style=flat-square" alt="AyuGram"/>
   <a href="https://t.me/MaxExteraPlugins">
     <img src="https://img.shields.io/badge/Telegram-@MaxExteraPlugins-2CA5E0?style=flat-square&logo=telegram" alt="Telegram Channel"/>
   </a>
@@ -36,6 +36,6 @@ Fixed and improved native ShareUI menu for faster sharing and cleaner layout.
 
 ## 📋 Compatibility
 
-* **exteraGram:** `>= 12.2.10`
-* **AyuGram:** `>= 12.2.10`
+* **exteraGram:** `>= 12.10.6`
+* **AyuGram:** `>= 12.10.6`
 * **Plugin SDK:** `>= 1.4.3.3`
