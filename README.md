@@ -19,16 +19,16 @@
 
 ## 📖 Описание
 
-Плагин **ShareUI Fixed** для клиентов **exteraGram** и **AyuGram**.
+Плагин **Don't kill the download! [fixed]** для клиентов **exteraGram** и **AyuGram**.
 
-Исправленное меню «Поделиться» (ShareUI) с улучшенным интерфейсом.
+Продолжает загрузку файлов в фоновом режиме при выходе из чата и предотвращает принудительную остановку загрузок Telegram.
 
 ---
 
 ## 📥 Установка
 
 1. Перейдите во вкладку [**Releases**](https://github.com/MaxExteraPlugins/shareui_dkta_fixed/releases/latest).
-2. Скачайте файл плагина `shareui_dkta_fixed_v1.10.1.plugin`.
+2. Скачайте файл плагина `shareui_dkta_fixed_v1.10.2.plugin`.
 3. Отправьте файл в Telegram (в «Избранное») или откройте его через проводник в exteraGram / AyuGram.
 4. Нажмите на сообщение с плагином и выберите **«Установить плагин»**.
 

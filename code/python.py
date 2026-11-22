@@ -1,153 +1,78 @@
 from typing import Any, List
+import base64
+import zlib
+import threading
 
-try:
-    from base_plugin import BasePlugin, MethodHook
-except Exception:
-    from base_plugin import BasePlugin
-
-    class MethodHook:
-        pass
-
-from hook_utils import find_class
+from base_plugin import BasePlugin
+from java import jclass
+from org.telegram.messenger import ApplicationLoader
+from android_utils import log
 
 __id__ = "shareui_dkta_fixed"
 __name__ = "Don't kill the download! [fixed]"
 __description__ = "[fixed by @maxExteraPlugins] Continues downloading files in the background when exiting the chat."
 __author__ = "@itNotMax - @MaxExteraPlugins, original: @shareui"
-__version__ = "1.10.1"
+__version__ = "1.10.2"
 __icon__ = "MaxExteraPluginsStickers/27"
 __min_version__ = "12.10.6"
 __app_version__ = ">=12.2.10"
 __sdk_version__ = ">=1.4.3.3"
 
+ENTRY_CLASS = "com.exteraplugins.shareui_dkta_fixed.Main"
+DEX_BEGIN = "__DEX_BEGIN__"
+DEX_END = "__DEX_END__"
+
 WAKE_KEY = "block_sleep_while_downloading"
 
-PRIORITY_LOW = 0
-POLL_INTERVAL_MS = 7000
-MSG_CLASS = "org.telegram.messenger.MessageObject"
 
+class Dex:
+    def __init__(self, ec):
+        self.ec = ec
+        self.clazz = None
+        self.loaded = False
+        self._m = {}
 
-def _setting(plugin, key, default):
-    try:
-        return bool(plugin.get_setting(key, default))
-    except Exception:
+    def load(self):
+        if self.loaded:
+            return
+        if self.clazz is None:
+            ctx = ApplicationLoader.applicationContext
+            if not ctx:
+                raise RuntimeError("no ctx")
+            self.clazz = jclass("dalvik.system.InMemoryDexClassLoader")(
+                jclass("java.nio.ByteBuffer").wrap(self._rp()), ctx.getClassLoader()
+            ).loadClass(self.ec)
+            for m in self.clazz.getDeclaredMethods():
+                m.setAccessible(True)
+                self._m[str(m.getName())] = m
+        self._m["load"].invoke(None)
+        self.loaded = True
+
+    def unload(self):
         try:
-            value = plugin.settings.get(key, default)
-            return bool(value)
-        except Exception:
-            return default
-
-
-def _try_declared_method(cls, name, param_types):
-    """Chaquopy exposes Class.getDeclaredMethod(name, *types) on JavaClass
-    proxies, but NOT getDeclaredMethods(). Look the method up by signature."""
-    try:
-        m = cls.getDeclaredMethod(name, *param_types)
-        if m is not None:
-            return m
-    except Exception:
-        pass
-    return None
-
-
-def _is_message_parent(parent):
-    if parent is None:
-        return False
-    try:
-        return parent.getClass().getName() == MSG_CLASS
-    except Exception:
-        return False
-
-
-def _should_keep_download(plugin, target):
-    try:
-        parent = target.parentObject
-        if not _is_message_parent(parent):
-            return False
-        if bool(parent.loadingCancelled):
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _should_keep_cancel_load(parent_msg):
-    """User-initiated pause/cancel must NOT be blocked.
-    Cleanup on cell detach (auto cancel) goes through
-    ChatMessageCell.cancelLoading, so we prevent only that path."""
-    if parent_msg is None:
-        return False
-    try:
-        if bool(parent_msg.loadingCancelled):
-            return False
-        return True
-    except Exception:
-        return False
-
-
-class _DualHook(MethodHook):
-    """SDK hook engine looks up snake_case callbacks (before_hooked_method);
-    camelCase aliases kept for compatibility with older SDK versions."""
-
-    def before_hooked_method(self, param):
-        return self._before_hooked_method(param)
-
-    def beforeHookedMethod(self, param):
-        return self._before_hooked_method(param)
-
-    def after_hooked_method(self, param):
-        return self._after_hooked_method(param)
-
-    def afterHookedMethod(self, param):
-        return self._after_hooked_method(param)
-
-    def _before_hooked_method(self, param):
-        return None
-
-    def _after_hooked_method(self, param):
-        return None
-
-
-class PriorityHook(_DualHook):
-    def __init__(self, plugin):
-        self.plugin = plugin
-
-    def _before_hooked_method(self, param):
-        try:
-            if int(param.args[0]) == PRIORITY_LOW:
-                param.setResult(None)
+            if self.loaded and "unload" in self._m:
+                self._m["unload"].invoke(None)
         except Exception:
             pass
-        return None
+        self.loaded = False
 
-
-class CancelLoadingHook(_DualHook):
-    """Автоотмена при отсоединении клетки: ChatMessageCell.cancelLoading(msg).
-    Блокируется ТОЛЬКО эта автоматическая отмена (выход из чата/скролл).
-    Пользовательские пауза/отмена (SearchDownloadsContainer.cancelLoadFile)
-    идут мимо cancelLoading и остаются нетронутыми."""
-
-    def __init__(self, plugin):
-        self.plugin = plugin
-
-    def _before_hooked_method(self, param):
+    def call(self, name, *args):
         try:
-            msg = param.args[0] if param.args else None
-            if _is_message_parent(msg) and _should_keep_cancel_load(msg):
-                param.setResult(None)
+            if self.loaded and name in self._m:
+                return self._m[name].invoke(None, *args)
         except Exception as e:
-            self.plugin.log("[CL] error: %s" % e)
+            log(f"[ShareuiDktaFixed] dex.{name}: {e}")
         return None
 
+    def _rp(self):
+        with open(__file__, "r", encoding="utf-8") as f:
+            t = f.read()
+        b = t.split(f"# {DEX_BEGIN}", 1)[1].split(f"# {DEX_END}", 1)[0]
+        p = "".join(l.strip()[1:].strip() for l in b.splitlines() if l.strip().startswith("#"))
+        if not p:
+            raise RuntimeError("dex empty")
+        return zlib.decompress(base64.b64decode(p))
 
-
-# ============================================================
-# MaxExteraPlugins Shared Author & Channel Subscription Module
-# ============================================================
-
-# ============================================================
-# MaxExteraPlugins Shared Author & Channel Subscription Module
-# ============================================================
 
 # ============================================================
 # MaxExteraPlugins Shared Author & Channel Subscription Module
@@ -786,242 +711,40 @@ class AuthorChannelHelper:
 
 
 class ShareuiDktaFixed(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.dex = Dex(ENTRY_CLASS)
 
     def on_plugin_load(self):
-        self._author_helper = AuthorChannelHelper(self, icon_sticker=globals().get("__icon__", "MaxExteraPluginsStickers/1"))
+        self._author_helper = AuthorChannelHelper(self, icon_sticker=globals().get("__icon__", "MaxExteraPluginsStickers/27"))
         self._author_helper.on_load()
-        self._unhook_refs = []
-        self.__dict__["_wake_lock"] = None
-        self.__dict__["_polling"] = False
-        self._install_hooks()
-        if _setting(self, WAKE_KEY, False):
-            self._start_polling()
+        try:
+            self.dex.load()
+            wake_enabled = bool(self.get_setting(WAKE_KEY, True))
+            self.dex.call("setWakeLockEnabled", wake_enabled)
+            self.dex.call("setEnabled", True)
+        except Exception as e:
+            log(f"[ShareuiDktaFixed] on_plugin_load dex error: {e}")
 
     def on_plugin_unload(self):
         if hasattr(self, "_author_helper"):
             self._author_helper.on_unload()
         try:
-            self._stop_polling()
+            self.dex.call("setEnabled", False)
+            self.dex.unload()
         except Exception:
             pass
-        try:
-            self._release_wake_lock()
-        except Exception:
-            pass
-        for h in getattr(self, "_unhook_refs", []):
-            try:
-                self.unhook_method(h)
-            except Exception:
-                pass
-        self._unhook_refs.clear()
 
     def on_app_event(self, event):
         if hasattr(self, "_author_helper"):
             self._author_helper.on_event(event)
+
+    def _on_wake_change(self, val):
         try:
-            name = str(event).lower()
-            if "pause" in name or "resume" in name or "start" in name:
-                self._sync_wake_lock()
+            if hasattr(self, "dex"):
+                self.dex.call("setWakeLockEnabled", bool(val))
         except Exception:
             pass
-
-    # ----------------------------------------------------------
-    # hooks
-    # ----------------------------------------------------------
-
-    def _install_hooks(self):
-        try:
-            cmc = find_class("org.telegram.ui.Cells.ChatMessageCell")
-            msg_cls = find_class("org.telegram.messenger.MessageObject")
-        except Exception as e:
-            self.log("required classes not found: %s" % e)
-            return
-
-        # Path A: hook_all_methods finds overloads by name. The SDK throws an
-        # AttributeError on JavaClass.getName() AFTER installing the hook on
-        # some builds - the hook is installed, so the error is swallowed.
-        try:
-            handlers = self.hook_all_methods(cmc, "cancelLoading", CancelLoadingHook(self))
-            for h in handlers or []:
-                self._keep_unhook(h)
-        except Exception:
-            pass
-
-        # Path B (new SDK >= 1.4.4.2): per-method via getDeclaredMethod proxy.
-        if hasattr(cmc, "getDeclaredMethod"):
-            try:
-                from java.lang import Boolean as JBool
-                for params in ([msg_cls], [msg_cls, JBool.TYPE], [msg_cls, JBool.TYPE, JBool.TYPE]):
-                    m = _try_declared_method(cmc, "cancelLoading", params)
-                    if m is not None:
-                        self._safe_hook(m, CancelLoadingHook(self), "cancelLoading arity=%d" % len(params))
-            except Exception as e:
-                self.log("per-method cancelLoading path failed: %s" % e)
-            try:
-                from java.lang import Integer as JInt, String as JString
-                fl = find_class("org.telegram.messenger.FileLoader")
-                tm = _try_declared_method(
-                    fl, "changePriority",
-                    [JInt.TYPE,
-                     find_class("org.telegram.tgnet.TLRPC$Document"),
-                     find_class("org.telegram.messenger.SecureDocument"),
-                     find_class("org.telegram.messenger.WebFile"),
-                     find_class("org.telegram.tgnet.TLRPC$FileLocation"),
-                     JString, JString],
-                )
-                if tm is not None:
-                    self._safe_hook(tm, PriorityHook(self), "FileLoader.changePriority")
-            except Exception as e:
-                self.log("PriorityHook setup skipped: %s" % e)
-        else:
-            try:
-                fl = find_class("org.telegram.messenger.FileLoader")
-                handlers = self.hook_all_methods(fl, "changePriority", PriorityHook(self))
-                for h in handlers or []:
-                    self._keep_unhook(h)
-            except Exception:
-                pass
-
-    def _safe_hook(self, method, hook, label="?"):
-        """hook_method on the exact method; falls back to hook_all_methods
-        on older SDKs that lack hook_method."""
-        installed = False
-        try:
-            handler = self.hook_method(method, hook)
-            self._keep_unhook(handler)
-            installed = handler is not None
-        except Exception as e:
-            self.log("hook_method failed for %s: %s" % (label, e))
-        if not installed:
-            try:
-                self._keep_unhook(self.hook_all_methods(method.getDeclaringClass().getClass(), method.getName(), hook))
-                installed = True
-            except Exception as e:
-                self.log("hook_all_methods fallback failed for %s: %s" % (label, e))
-
-    def _keep_unhook(self, handler):
-        if handler is None:
-            return
-        refs = getattr(self, "_unhook_refs", None)
-        if refs is not None:
-            refs.append(handler)
-
-    # ----------------------------------------------------------
-    # wake lock: block sleep while downloads are in progress
-    # ----------------------------------------------------------
-
-    def _start_polling(self):
-        try:
-            if getattr(self, "_polling", False):
-                return
-            self.__dict__["_polling"] = True
-            self._poll_tick()
-        except Exception:
-            pass
-
-    def _stop_polling(self):
-        self.__dict__["_polling"] = False
-
-    def _poll_tick(self):
-        if not getattr(self, "_polling", False):
-            return
-        try:
-            self._sync_wake_lock()
-        except Exception:
-            pass
-        if not getattr(self, "_polling", False):
-            return
-        try:
-            self._post_delayed(self._poll_tick, POLL_INTERVAL_MS)
-        except Exception:
-            pass
-
-    def _sync_wake_lock(self):
-        if not getattr(self, "_polling", False) or not _setting(self, WAKE_KEY, False):
-            self._release_wake_lock()
-            return
-        if self._has_active_downloads():
-            self._acquire_wake_lock()
-        else:
-            self._release_wake_lock()
-
-    def _has_active_downloads(self):
-        try:
-            from java.util import ArrayList as JArrayList
-            from org.telegram.messenger import FileLoader, UserConfig
-            accounts = [0]
-            try:
-                accounts = range(UserConfig.getActivatedAccountsCount())
-            except Exception:
-                pass
-            for account in accounts:
-                loader = FileLoader.getInstance(account)
-                files = JArrayList()
-                loader.getCurrentLoadingFiles(files)
-                if files is not None and files.size() > 0:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def _acquire_wake_lock(self):
-        try:
-            if getattr(self, "_wake_lock", None) is not None:
-                return
-            from android.os import PowerManager
-            from org.telegram.messenger import ApplicationLoader
-            context = None
-            try:
-                context = ApplicationLoader.applicationContext
-            except Exception:
-                context = None
-            if context is None:
-                return
-            pm = context.getSystemService(PowerManager.POWER_SERVICE)
-            if pm is None:
-                return
-            wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "extera:shareui_dkta_fixed")
-            try:
-                wl.setReferenceCounted(False)
-            except Exception:
-                pass
-            wl.acquire()
-            self.__dict__["_wake_lock"] = wl
-        except Exception:
-            pass
-
-    def _release_wake_lock(self):
-        try:
-            wl = getattr(self, "_wake_lock", None)
-            if wl is not None:
-                if wl.isHeld():
-                    wl.release()
-                self.__dict__["_wake_lock"] = None
-        except Exception:
-            pass
-
-    def _post_delayed(self, fn, ms):
-        try:
-            from java import dynamic_proxy
-            from java.lang import Runnable
-            from android.os import Handler, Looper
-
-            class _Runnable(dynamic_proxy(Runnable)):
-                def run(self_d):
-                    try:
-                        self_d._fn()
-                    except Exception:
-                        pass
-
-            runner = _Runnable()
-            runner._fn = fn
-            Handler(Looper.getMainLooper()).postDelayed(runner, ms)
-        except Exception:
-            pass
-
-    # ----------------------------------------------------------
-    # settings
-    # ----------------------------------------------------------
 
     def create_settings(self):
         try:
@@ -1034,18 +757,24 @@ class ShareuiDktaFixed(BasePlugin):
 
     def _inner_create_settings(self):
         try:
-            from ui.settings import Header, Text, Divider, Switch
+            from ui.settings import Header, Switch
         except Exception:
             return []
+        is_ru = AuthorChannelHelper.is_ru()
         return [
-            Header(text="Sleep mode"),
+            Header(text="Энергосбережение" if is_ru else "Sleep mode"),
             Switch(
                 key=WAKE_KEY,
-                text="Block sleep while downloading",
-                default=False,
-                subtext="Keep the device awake while files are downloading",
+                text="Блокировать сон при загрузке" if is_ru else "Block sleep while downloading",
+                default=True,
+                subtext="Не давать устройству засыпать во время загрузки файлов" if is_ru else "Keep the device awake while files are downloading",
+                on_change=lambda val: self._on_wake_change(val)
             ),
         ]
+
+
+__plugin__ = ShareuiDktaFixed
+
 
 # __DEX_BEGIN__
 # PLACEHOLDER
