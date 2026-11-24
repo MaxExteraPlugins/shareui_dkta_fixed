@@ -71,15 +71,22 @@ public class Main {
                                 Object msg = param.args[0];
                                 if (msg != null) {
                                     try {
-                                        Field f = msg.getClass().getDeclaredField("loadingCancelled");
-                                        f.setAccessible(true);
+                                        Field f = moClass.getField("loadingCancelled");
                                         boolean isCancelled = f.getBoolean(msg);
                                         if (!isCancelled) {
                                             // Cell detach auto-cancel: block it!
                                             param.setResult(null);
                                         }
                                     } catch (Throwable t) {
-                                        param.setResult(null);
+                                        try {
+                                            Field f2 = msg.getClass().getDeclaredField("loadingCancelled");
+                                            f2.setAccessible(true);
+                                            if (!f2.getBoolean(msg)) {
+                                                param.setResult(null);
+                                            }
+                                        } catch (Throwable ignored) {
+                                            param.setResult(null);
+                                        }
                                     }
                                 }
                             }
@@ -91,7 +98,7 @@ public class Main {
             Log.e(TAG, "Failed to hook ChatMessageCell.cancelLoading", t);
         }
 
-        // 2. Hook FileLoader.cancelLoadFile to block automatic cancellations from UI
+        // 2. Hook FileLoader.cancelLoadFile to block automatic cancellations from UI lifecycle
         try {
             Class<?> flClass = Class.forName("org.telegram.messenger.FileLoader");
             for (Method m : flClass.getDeclaredMethods()) {
@@ -126,9 +133,9 @@ public class Main {
                             try {
                                 if (param.args != null && param.args.length > 0 && param.args[0] instanceof Integer) {
                                     int priority = ((Integer) param.args[0]).intValue();
-                                    if (priority <= 0) {
-                                        // Keep at least normal priority (65536)
-                                        param.args[0] = Integer.valueOf(65536);
+                                    if (priority <= 0) { // PRIORITY_LOW = 0
+                                        // Keep at least PRIORITY_NORMAL_UP (2) or PRIORITY_NORMAL (1)
+                                        param.args[0] = Integer.valueOf(2);
                                     }
                                 }
                             } catch (Throwable ignored) {}
@@ -140,27 +147,82 @@ public class Main {
             Log.e(TAG, "Failed to hook FileLoader.changePriority", t);
         }
 
-        // 4. Hook FileLoader.loadFile to mark MessageObject.putInDownloadsStore = true and acquire wake lock
+        // 4. Hook FileLoader.loadFile to mark MessageObject.putInDownloadsStore = true,
+        // register in DownloadController, and acquire wake lock
         try {
             Class<?> flClass = Class.forName("org.telegram.messenger.FileLoader");
             Class<?> moClass = Class.forName("org.telegram.messenger.MessageObject");
+            Class<?> docClass = null;
+            try {
+                docClass = Class.forName("org.telegram.tgnet.TLRPC$Document");
+            } catch (Throwable ignored) {}
+
             for (Method m : flClass.getDeclaredMethods()) {
                 if ("loadFile".equals(m.getName())) {
                     m.setAccessible(true);
+                    final Class<?> finalDocClass = docClass;
                     hooks.add(XposedBridge.hookMethod(m, new XC_MethodHook() {
                         @Override
                         public void beforeHookedMethod(MethodHookParam param) {
                             if (!enabled) return;
                             try {
+                                Object docObj = null;
+                                Object moObj = null;
+
                                 if (param.args != null) {
                                     for (Object arg : param.args) {
-                                        if (arg != null && moClass.isAssignableFrom(arg.getClass())) {
-                                            Field f = arg.getClass().getDeclaredField("putInDownloadsStore");
-                                            f.setAccessible(true);
-                                            f.setBoolean(arg, true);
+                                        if (arg == null) continue;
+                                        if (moClass.isAssignableFrom(arg.getClass())) {
+                                            moObj = arg;
+                                        } else if (finalDocClass != null && finalDocClass.isAssignableFrom(arg.getClass())) {
+                                            docObj = arg;
                                         }
                                     }
                                 }
+
+                                if (moObj != null) {
+                                    try {
+                                        Field fPut = moClass.getField("putInDownloadsStore");
+                                        fPut.setBoolean(moObj, true);
+                                    } catch (Throwable t) {
+                                        try {
+                                            Field fPut2 = moObj.getClass().getDeclaredField("putInDownloadsStore");
+                                            fPut2.setAccessible(true);
+                                            fPut2.setBoolean(moObj, true);
+                                        } catch (Throwable ignored) {}
+                                    }
+
+                                    try {
+                                        Field fCancel = moClass.getField("loadingCancelled");
+                                        fCancel.setBoolean(moObj, false);
+                                    } catch (Throwable t) {
+                                        try {
+                                            Field fCancel2 = moObj.getClass().getDeclaredField("loadingCancelled");
+                                            fCancel2.setAccessible(true);
+                                            fCancel2.setBoolean(moObj, false);
+                                        } catch (Throwable ignored) {}
+                                    }
+
+                                    // Explicitly register in DownloadController so Telegram's
+                                    // background download manager tracks it and keeps foreground service active
+                                    if (docObj != null) {
+                                        try {
+                                            Class<?> dcClass = Class.forName("org.telegram.messenger.DownloadController");
+                                            int acc = 0;
+                                            try {
+                                                Field caField = flClass.getDeclaredField("currentAccount");
+                                                caField.setAccessible(true);
+                                                acc = caField.getInt(param.thisObject);
+                                            } catch (Throwable ignored) {}
+
+                                            Method getInstanceMethod = dcClass.getMethod("getInstance", int.class);
+                                            Object dc = getInstanceMethod.invoke(null, acc);
+                                            Method startMethod = dcClass.getMethod("startDownloadFile", finalDocClass, moClass);
+                                            startMethod.invoke(dc, docObj, moObj);
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+
                                 checkAndAcquireWakeLock();
                             } catch (Throwable ignored) {}
                         }
@@ -174,22 +236,26 @@ public class Main {
 
     private static boolean isAutoCancel(StackTraceElement[] stack) {
         if (stack == null) return false;
-        for (int i = 0; i < Math.min(stack.length, 25); i++) {
+        for (int i = 0; i < Math.min(stack.length, 30); i++) {
             String method = stack[i].getMethodName();
             String cls = stack[i].getClassName();
 
             // Explicit user actions: allow cancel!
             if ("didPressButton".equals(method) || "didPressMiniButton".equals(method) ||
                 cls.contains("SearchDownloadsContainer") || "cancelDownloading".equals(method) ||
-                "cancelAll".equals(method)) {
+                "cancelAll".equals(method) || "cancelDownload".equals(method) ||
+                "onCancelDownload".equals(method)) {
                 return false;
             }
 
             // Automatic UI lifecycle cleanups: BLOCK cancel!
             if ("cancelLoading".equals(method) || "fileDetach".equals(method) ||
-                "onPhotoClosed".equals(method) || "switchToNextIndex".equals(method) ||
-                "checkImageReceiversAttachState".equals(method) || "onDetachedFromWindow".equals(method) ||
-                "onFragmentDestroy".equals(method)) {
+                "onPhotoClosed".equals(method) || "closePhoto".equals(method) ||
+                "switchToNextIndex".equals(method) || "checkImageReceiversAttachState".equals(method) ||
+                "onDetachedFromWindow".equals(method) || "onViewDetachedFromWindow".equals(method) ||
+                "onFragmentDestroy".equals(method) || "onPause".equals(method) || "onStop".equals(method) ||
+                "didDetachFromWindow".equals(method) || "clearImage".equals(method) ||
+                "resetImage".equals(method)) {
                 return true;
             }
         }
@@ -212,8 +278,11 @@ public class Main {
                     wakeLock.setReferenceCounted(false);
                 }
             }
-            if (wakeLock != null && !wakeLock.isHeld()) {
-                wakeLock.acquire(15 * 60 * 1000L); // 15 min safe guard
+            if (wakeLock != null) {
+                if (wakeLock.isHeld()) {
+                    wakeLock.release();
+                }
+                wakeLock.acquire(30 * 60 * 1000L); // 30 min safe guard per download burst
             }
         } catch (Throwable ignored) {}
     }
